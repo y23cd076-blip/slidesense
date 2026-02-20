@@ -4,33 +4,42 @@ import requests, json, os, time, hashlib
 from PyPDF2 import PdfReader
 from PIL import Image
 import torch
-from supabase import create_client
 
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
+# LangChain (STABLE IMPORTS)
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
-from langchain.chains.combine_documents import create_stuff_documents_chain
-from langchain.prompts import ChatPromptTemplate
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.prompts import ChatPromptTemplate
+from langchain.chains.combine_documents import create_stuff_documents_chain
 
+# Transformers
 from transformers import BlipProcessor, BlipForQuestionAnswering
 
 # -------------------- CONFIG --------------------
 st.set_page_config(page_title="SlideSense", page_icon="📘", layout="wide")
-
-# -------------------- SUPABASE --------------------
-SUPABASE_URL = "https://dwtklgdlykgwustgocba.supabase.co"
-SUPABASE_KEY = "sb_publishable_RCdzFID7M8IePq0KpQAF3A_8-yvTNDB"
-
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+USERS_FILE = "users.json"
 
 # -------------------- HELPERS --------------------
+def load_users():
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE) as f:
+            return json.load(f)
+    return {}
+
+def save_users(users):
+    with open(USERS_FILE, "w") as f:
+        json.dump(users, f)
+
 def hash_password(pw):
     return hashlib.sha256(pw.encode()).hexdigest()
 
 def load_lottie(url):
-    r = requests.get(url)
-    return r.json() if r.status_code == 200 else None
+    try:
+        r = requests.get(url, timeout=10)
+        return r.json() if r.status_code == 200 else None
+    except:
+        return None
 
 def type_text(text, speed=0.03):
     box = st.empty()
@@ -57,7 +66,7 @@ def load_blip():
 # -------------------- SESSION DEFAULTS --------------------
 defaults = {
     "authenticated": False,
-    "username": None,
+    "users": load_users(),
     "vector_db": None,
     "chat_history": [],
     "current_pdf_id": None
@@ -86,10 +95,8 @@ def login_ui():
             u = st.text_input("Username")
             p = st.text_input("Password", type="password")
             if st.button("Login"):
-                res = supabase.table("users").select("*").eq("username", u).execute()
-                if res.data and res.data[0]["password"] == hash_password(p):
+                if u in st.session_state.users and st.session_state.users[u] == hash_password(p):
                     st.session_state.authenticated = True
-                    st.session_state.username = u
                     st.rerun()
                 else:
                     st.error("Invalid credentials")
@@ -98,14 +105,11 @@ def login_ui():
             nu = st.text_input("New Username")
             np = st.text_input("New Password", type="password")
             if st.button("Create Account"):
-                res = supabase.table("users").select("*").eq("username", nu).execute()
-                if res.data:
+                if nu in st.session_state.users:
                     st.warning("User already exists")
                 else:
-                    supabase.table("users").insert({
-                        "username": nu,
-                        "password": hash_password(np)
-                    }).execute()
+                    st.session_state.users[nu] = hash_password(np)
+                    save_users(st.session_state.users)
                     st.success("Account created")
 
 # -------------------- IMAGE Q&A --------------------
@@ -113,14 +117,14 @@ def answer_image_question(image, question):
     processor, model, device = load_blip()
     inputs = processor(image, question, return_tensors="pt").to(device)
 
-    outputs = model.generate(**inputs, max_length=10, num_beams=5)
+    outputs = model.generate(**inputs, max_length=20, num_beams=5)
     short_answer = processor.decode(outputs[0], skip_special_tokens=True)
 
     llm = load_llm()
     prompt = f"""
 Question: {question}
 Vision Answer: {short_answer}
-Convert into one clear sentence. No extra details.
+Convert into a clear natural sentence.
 """
     return llm.invoke(prompt).content
 
@@ -130,9 +134,10 @@ if not st.session_state.authenticated:
     st.stop()
 
 # -------------------- SIDEBAR --------------------
-st.sidebar.success(f"Logged in as {st.session_state.username} ✅")
+st.sidebar.success("Logged in ✅")
 
 if st.sidebar.button("Logout"):
+    st.cache_resource.clear()
     for k in defaults:
         st.session_state[k] = defaults[k]
     st.rerun()
@@ -145,7 +150,6 @@ st.sidebar.markdown("### 💬 Chat History")
 if st.session_state.chat_history:
     for i, (q, _) in enumerate(st.session_state.chat_history[-5:], start=1):
         st.sidebar.markdown(f"{i}. {q[:40]}...")
-
     if st.sidebar.button("🧹 Clear History"):
         st.session_state.chat_history = []
         st.rerun()
@@ -169,7 +173,7 @@ st.divider()
 
 # ==================== PDF ANALYZER ====================
 if mode == "📘 PDF Analyzer":
-    pdf = st.file_uploader("Upload PDF", type="pdf", key="pdf_uploader")
+    pdf = st.file_uploader("Upload PDF", type="pdf")
 
     if pdf:
         pdf_id = f"{pdf.name}_{pdf.size}"
@@ -183,15 +187,9 @@ if mode == "📘 PDF Analyzer":
             with st.spinner("Processing PDF..."):
                 reader = PdfReader(pdf)
                 text = ""
-
-                for pdf_page in reader.pages:
-                    extracted = pdf_page.extract_text()
-                    if extracted:
-                        text += extracted + "\n"
-
-                if not text.strip():
-                    st.error("No readable text found in PDF")
-                    st.stop()
+                for page in reader.pages:
+                    if page.extract_text():
+                        text += page.extract_text() + "\n"
 
                 splitter = RecursiveCharacterTextSplitter(
                     chunk_size=500,
@@ -226,18 +224,9 @@ Rules:
             chain = create_stuff_documents_chain(llm, prompt)
             res = chain.invoke({"context": docs, "question": q})
 
-            answer = res.get("output_text") if isinstance(res, dict) else res
-
+            answer = res if isinstance(res, str) else res.get("output_text", "")
             st.session_state.chat_history.append((q, answer))
 
-            # ---- Save to Supabase ----
-            supabase.table("pdf_chats").insert({
-                "username": st.session_state.username,
-                "question": q,
-                "answer": answer
-            }).execute()
-
-        # -------- CHAT DISPLAY --------
         st.markdown("## 💬 Conversation")
 
         for uq, ua in st.session_state.chat_history:
