@@ -4,8 +4,9 @@ import requests, json, os, time, hashlib
 from PyPDF2 import PdfReader
 from PIL import Image
 import torch
+from supabase import create_client
 
-# LangChain (STABLE IMPORTS)
+# LangChain (stable)
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
@@ -19,6 +20,11 @@ from transformers import BlipProcessor, BlipForQuestionAnswering
 # -------------------- CONFIG --------------------
 st.set_page_config(page_title="SlideSense", page_icon="📘", layout="wide")
 USERS_FILE = "users.json"
+
+# -------------------- SUPABASE --------------------
+SUPABASE_URL = "https://dwtklgdlykgwustgocba.supabase.co"
+SUPABASE_KEY = "sb_publishable_RCdzFID7M8IePq0KpQAF3A_8-yvTNDB"
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 # -------------------- HELPERS --------------------
 def load_users():
@@ -69,7 +75,8 @@ defaults = {
     "users": load_users(),
     "vector_db": None,
     "chat_history": [],
-    "current_pdf_id": None
+    "current_pdf_id": None,
+    "user_id": None
 }
 
 for k, v in defaults.items():
@@ -97,6 +104,7 @@ def login_ui():
             if st.button("Login"):
                 if u in st.session_state.users and st.session_state.users[u] == hash_password(p):
                     st.session_state.authenticated = True
+                    st.session_state.user_id = hashlib.md5(u.encode()).hexdigest()[:32]
                     st.rerun()
                 else:
                     st.error("Invalid credentials")
@@ -143,18 +151,6 @@ if st.sidebar.button("Logout"):
     st.rerun()
 
 mode = st.sidebar.radio("Mode", ["📘 PDF Analyzer", "🖼 Image Q&A"])
-
-# -------------------- SIDEBAR HISTORY --------------------
-st.sidebar.markdown("### 💬 Chat History")
-
-if st.session_state.chat_history:
-    for i, (q, _) in enumerate(st.session_state.chat_history[-5:], start=1):
-        st.sidebar.markdown(f"{i}. {q[:40]}...")
-    if st.sidebar.button("🧹 Clear History"):
-        st.session_state.chat_history = []
-        st.rerun()
-else:
-    st.sidebar.caption("No history yet")
 
 # -------------------- HERO --------------------
 col1, col2 = st.columns([1, 2])
@@ -223,15 +219,30 @@ Rules:
 
             chain = create_stuff_documents_chain(llm, prompt)
             res = chain.invoke({"context": docs, "question": q})
-
             answer = res if isinstance(res, str) else res.get("output_text", "")
+
+            # ---------- SAVE TO SUPABASE ----------
+            supabase.table("pdf_chats").insert({
+                "user_id": st.session_state.user_id,
+                "question": q,
+                "answer": answer
+            }).execute()
+
             st.session_state.chat_history.append((q, answer))
 
         st.markdown("## 💬 Conversation")
 
-        for uq, ua in st.session_state.chat_history:
-            st.markdown(f"🧑 **You:** {uq}")
-            st.markdown(f"🤖 **AI:** {ua}")
+        # ---------- LOAD FROM DB ----------
+        db_data = supabase.table("pdf_chats")\
+            .select("question,answer")\
+            .eq("user_id", st.session_state.user_id)\
+            .order("created_at", desc=True)\
+            .limit(20)\
+            .execute()
+
+        for row in reversed(db_data.data):
+            st.markdown(f"🧑 **You:** {row['question']}")
+            st.markdown(f"🤖 **AI:** {row['answer']}")
             st.divider()
 
 # ==================== IMAGE Q&A ====================
@@ -245,4 +256,13 @@ if mode == "🖼 Image Q&A":
         question = st.text_input("Ask a question about the image")
         if question:
             with st.spinner("Analyzing image..."):
-                st.success(answer_image_question(img, question))
+                answer = answer_image_question(img, question)
+
+                # ---------- SAVE TO SUPABASE ----------
+                supabase.table("pdf_chats").insert({
+                    "user_id": st.session_state.user_id,
+                    "question": f"[IMAGE] {question}",
+                    "answer": answer
+                }).execute()
+
+                st.success(answer)
