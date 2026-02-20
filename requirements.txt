@@ -1,6 +1,15 @@
 streamlit
-supabase
+streamlit-lottie
+requests
 PyPDF2
+pillow
+torch
+langchain
+langchain-community
+langchain-huggingface
+langchain-google-genai
 sentence-transformers
 faiss-cpu
-numpy
+transformers
+supabase
+python-dotenv
