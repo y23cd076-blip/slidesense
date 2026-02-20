@@ -1,6 +1,6 @@
 import streamlit as st
 from streamlit_lottie import st_lottie
-import requests, json, os, time, hashlib
+import requests, json, os, time, hashlib, uuid
 from PyPDF2 import PdfReader
 from PIL import Image
 import torch
@@ -104,7 +104,8 @@ def login_ui():
             if st.button("Login"):
                 if u in st.session_state.users and st.session_state.users[u] == hash_password(p):
                     st.session_state.authenticated = True
-                    st.session_state.user_id = hashlib.md5(u.encode()).hexdigest()[:32]
+                    # ✅ REAL UUID (DB SAFE)
+                    st.session_state.user_id = str(uuid.uuid4())
                     st.rerun()
                 else:
                     st.error("Invalid credentials")
