@@ -494,7 +494,10 @@ else:
     st.markdown("### 💬 Conversation")
     for role, content in messages:
         with st.chat_message("user" if role == "user" else "assistant"):
-            render_answer_with_copy(content) if role == "assistant" else st.markdown(content)
+            if role == "assistant":
+                render_answer_with_copy(content)
+            else:
+                st.markdown(content)
 
     question = st.chat_input("Ask something...")
 
