@@ -1,269 +1,508 @@
 import streamlit as st
 from streamlit_lottie import st_lottie
-import requests, json, os, time, hashlib, uuid
+from datetime import datetime
+import uuid
+import requests
+import time
+import json
 from PyPDF2 import PdfReader
 from PIL import Image
-import torch
-from supabase import create_client
+import base64
+import streamlit.components.v1 as components
 
-# LangChain (stable)
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
+# Firebase
+import firebase_admin
+from firebase_admin import credentials, auth, firestore
+
+# LangChain
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain.chains.combine_documents.stuff import create_stuff_documents_chain
+from langchain.prompts import ChatPromptTemplate
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import ChatPromptTemplate
-from langchain.chains.combine_documents import create_stuff_documents_chain
+from langchain_core.messages import HumanMessage
 
-# Transformers
-from transformers import BlipProcessor, BlipForQuestionAnswering
 
-# -------------------- CONFIG --------------------
-st.set_page_config(page_title="SlideSense", page_icon="📘", layout="wide")
-USERS_FILE = "users.json"
+st.set_page_config(page_title="SlideSense AI", page_icon="🧠", layout="wide")
 
-# -------------------- SUPABASE --------------------
-SUPABASE_URL = "https://dwtklgdlykgwustgocba.supabase.co"
-SUPABASE_KEY = "sb_publishable_RCdzFID7M8IePq0KpQAF3A_8-yvTNDB"
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+st.markdown("""
+    <style>
+    #MainMenu {visibility: hidden;}
+    header {visibility: hidden;}
+    footer {visibility: hidden;}
+    .logo-bar {
+        display: flex; align-items: center; gap: 14px;
+        padding: 18px 0 10px 0;
+    }
+    .logo-icon {
+        width: 56px; height: 56px;
+        background: linear-gradient(135deg, #6C63FF 0%, #48CAE4 100%);
+        border-radius: 14px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 30px;
+        box-shadow: 0 4px 20px rgba(108,99,255,0.45);
+        flex-shrink: 0;
+    }
+    .logo-text {
+        font-size: 2.2rem; font-weight: 900; letter-spacing: 5px;
+        background: linear-gradient(135deg, #6C63FF 0%, #48CAE4 100%);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        background-clip: text; margin: 0; line-height: 1.1;
+    }
+    .logo-tagline {
+        font-size: 0.7rem; color: #888; letter-spacing: 2.5px;
+        text-transform: uppercase; margin: 0;
+    }
+    .sidebar-logo {
+        display: flex; align-items: center; gap: 10px;
+        padding: 8px 0 14px 0;
+        border-bottom: 1px solid rgba(108,99,255,0.2);
+        margin-bottom: 12px;
+    }
+    .sidebar-logo-icon {
+        width: 34px; height: 34px;
+        background: linear-gradient(135deg, #6C63FF 0%, #48CAE4 100%);
+        border-radius: 8px;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 17px;
+    }
+    .sidebar-logo-text {
+        font-size: 1rem; font-weight: 800; letter-spacing: 3px;
+        background: linear-gradient(135deg, #6C63FF 0%, #48CAE4 100%);
+        -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
-# -------------------- HELPERS --------------------
-def load_users():
-    if os.path.exists(USERS_FILE):
-        with open(USERS_FILE) as f:
-            return json.load(f)
-    return {}
 
-def save_users(users):
-    with open(USERS_FILE, "w") as f:
-        json.dump(users, f)
+# -------------------- FIREBASE INIT --------------------
+if not firebase_admin._apps:
+    raw_key = st.secrets["firebase"]["private_key"]
+    private_key = raw_key.replace("\\n", "\n")
+    firebase_config = {
+        "type": st.secrets["firebase"]["type"],
+        "project_id": st.secrets["firebase"]["project_id"],
+        "private_key_id": st.secrets["firebase"]["private_key_id"],
+        "private_key": private_key,
+        "client_email": st.secrets["firebase"]["client_email"],
+        "client_id": st.secrets["firebase"]["client_id"],
+        "auth_uri": st.secrets["firebase"]["auth_uri"],
+        "token_uri": st.secrets["firebase"]["token_uri"],
+        "auth_provider_x509_cert_url": st.secrets["firebase"]["auth_provider_x509_cert_url"],
+        "client_x509_cert_url": st.secrets["firebase"]["client_x509_cert_url"],
+    }
+    cred = credentials.Certificate(firebase_config)
+    firebase_admin.initialize_app(cred)
 
-def hash_password(pw):
-    return hashlib.sha256(pw.encode()).hexdigest()
+db = firestore.client()
 
-def load_lottie(url):
-    try:
-        r = requests.get(url, timeout=10)
-        return r.json() if r.status_code == 200 else None
-    except:
-        return None
 
-def type_text(text, speed=0.03):
-    box = st.empty()
-    out = ""
-    for c in text:
-        out += c
-        box.markdown(f"### {out}")
-        time.sleep(speed)
-
-# -------------------- CACHED MODELS --------------------
-@st.cache_resource
-def load_llm():
-    return ChatGoogleGenerativeAI(model="gemini-2.5-flash")
-
-@st.cache_resource
-def load_blip():
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    processor = BlipProcessor.from_pretrained("Salesforce/blip-vqa-base")
-    model = BlipForQuestionAnswering.from_pretrained(
-        "Salesforce/blip-vqa-base"
-    ).to(device)
-    return processor, model, device
-
-# -------------------- SESSION DEFAULTS --------------------
+# -------------------- SESSION INIT --------------------
 defaults = {
     "authenticated": False,
-    "users": load_users(),
+    "is_guest": False,
+    "user_id": None,
+    "email": None,
+    "mode": "PDF",
+    "current_chat_id": None,
     "vector_db": None,
-    "chat_history": [],
-    "current_pdf_id": None,
-    "user_id": None
+    "guest_messages": [],
+    "logo_typed": False,
 }
 
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# -------------------- AUTH UI --------------------
-def login_ui():
-    col1, col2 = st.columns(2)
 
-    with col1:
-        st_lottie(
-            load_lottie("https://assets10.lottiefiles.com/packages/lf20_jcikwtux.json"),
-            height=300
-        )
+# -------------------- HELPERS --------------------
+def load_lottie(url):
+    try:
+        r = requests.get(url, timeout=5)
+        return r.json() if r.status_code == 200 else None
+    except Exception:
+        return None
 
-    with col2:
-        type_text("🔐 Welcome to SlideSense")
 
-        tab1, tab2 = st.tabs(["Login", "Sign Up"])
+def type_text_logo():
+    if st.session_state.logo_typed:
+        st.markdown("""
+            <div class="logo-bar">
+                <div class="logo-icon">🧠</div>
+                <div>
+                    <p class="logo-text">SLIDESENSE</p>
+                    <p class="logo-tagline">AI · PDF · Image Analyzer</p>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+        return
 
-        with tab1:
-            u = st.text_input("Username")
-            p = st.text_input("Password", type="password")
-            if st.button("Login"):
-                if u in st.session_state.users and st.session_state.users[u] == hash_password(p):
-                    st.session_state.authenticated = True
-                    # ✅ REAL UUID (DB SAFE)
-                    st.session_state.user_id = str(uuid.uuid4())
-                    st.rerun()
-                else:
-                    st.error("Invalid credentials")
+    placeholder = st.empty()
+    full = "SLIDESENSE"
+    out = ""
+    for c in full:
+        out += c
+        placeholder.markdown(f"""
+            <div class="logo-bar">
+                <div class="logo-icon">🧠</div>
+                <div>
+                    <p class="logo-text">{out}</p>
+                    <p class="logo-tagline">AI · PDF · Image Analyzer</p>
+                </div>
+            </div>
+        """, unsafe_allow_html=True)
+        time.sleep(0.07)
+    st.session_state.logo_typed = True
 
-        with tab2:
-            nu = st.text_input("New Username")
-            np = st.text_input("New Password", type="password")
-            if st.button("Create Account"):
-                if nu in st.session_state.users:
-                    st.warning("User already exists")
-                else:
-                    st.session_state.users[nu] = hash_password(np)
-                    save_users(st.session_state.users)
-                    st.success("Account created")
 
-# -------------------- IMAGE Q&A --------------------
-def answer_image_question(image, question):
-    processor, model, device = load_blip()
-    inputs = processor(image, question, return_tensors="pt").to(device)
+def render_logo():
+    st.markdown("""
+        <div class="logo-bar">
+            <div class="logo-icon">🧠</div>
+            <div>
+                <p class="logo-text">SLIDESENSE</p>
+                <p class="logo-tagline">AI · PDF · Image Analyzer</p>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
 
-    outputs = model.generate(**inputs, max_length=20, num_beams=5)
-    short_answer = processor.decode(outputs[0], skip_special_tokens=True)
 
-    llm = load_llm()
-    prompt = f"""
-Question: {question}
-Vision Answer: {short_answer}
-Convert into a clear natural sentence.
-"""
-    return llm.invoke(prompt).content
-
-# -------------------- AUTH CHECK --------------------
-if not st.session_state.authenticated:
-    login_ui()
-    st.stop()
-
-# -------------------- SIDEBAR --------------------
-st.sidebar.success("Logged in ✅")
-
-if st.sidebar.button("Logout"):
-    st.cache_resource.clear()
-    for k in defaults:
-        st.session_state[k] = defaults[k]
-    st.rerun()
-
-mode = st.sidebar.radio("Mode", ["📘 PDF Analyzer", "🖼 Image Q&A"])
-
-# -------------------- HERO --------------------
-col1, col2 = st.columns([1, 2])
-
-with col1:
-    st_lottie(
-        load_lottie("https://assets10.lottiefiles.com/packages/lf20_qp1q7mct.json"),
-        height=250
+def render_answer_with_copy(answer: str) -> None:
+    st.markdown(answer)
+    safe_text = json.dumps(answer)
+    components.html(
+        f"""<button onclick="navigator.clipboard.writeText({safe_text});"
+            style="margin-top:4px;padding:4px 12px;border-radius:6px;
+                   border:1px solid #6C63FF;color:#6C63FF;
+                   background:transparent;cursor:pointer;font-size:12px;">
+            📋 Copy
+        </button>""",
+        height=40,
     )
 
-with col2:
-    type_text("📘 SlideSense AI Platform")
-    st.markdown("### Smart Learning | Smart Vision | Smart AI")
 
-st.divider()
+# -------------------- AUTH FUNCTIONS --------------------
+def signup(email, password):
+    try:
+        return auth.create_user(email=email, password=password)
+    except auth.EmailAlreadyExistsError:
+        st.error("An account with this email already exists.")
+        return None
+    except Exception as e:
+        st.error(f"Signup error: {e}")
+        return None
 
-# ==================== PDF ANALYZER ====================
-if mode == "📘 PDF Analyzer":
-    pdf = st.file_uploader("Upload PDF", type="pdf")
 
-    if pdf:
-        pdf_id = f"{pdf.name}_{pdf.size}"
+def login(email, password):
+    try:
+        if "FIREBASE_WEB_API_KEY" not in st.secrets:
+            st.error("FIREBASE_WEB_API_KEY missing from secrets.")
+            return None
+        api_key = st.secrets["FIREBASE_WEB_API_KEY"]
+        url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={api_key}"
+        data = requests.post(url, json={"email": email, "password": password, "returnSecureToken": True}).json()
+        if "error" in data:
+            msg = data["error"]["message"]
+            st.error("❌ Invalid email or password." if msg in ("EMAIL_NOT_FOUND","INVALID_LOGIN_CREDENTIALS","INVALID_PASSWORD") else f"Login failed: {msg}")
+            return None
+        return auth.get_user_by_email(email)
+    except Exception as e:
+        st.error(f"Login error: {e}")
+        return None
 
-        if st.session_state.current_pdf_id != pdf_id:
-            st.session_state.current_pdf_id = pdf_id
+
+def reset_password(email):
+    try:
+        if "FIREBASE_WEB_API_KEY" not in st.secrets:
+            return False
+        api_key = st.secrets["FIREBASE_WEB_API_KEY"]
+        url = f"https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={api_key}"
+        data = requests.post(url, json={"requestType": "PASSWORD_RESET", "email": email}).json()
+        if "error" in data:
+            st.error(f"Reset failed: {data['error']['message']}")
+            return False
+        return True
+    except Exception as e:
+        st.error(f"Reset error: {e}")
+        return False
+
+
+# -------------------- FIRESTORE --------------------
+def create_new_chat(user_id, mode):
+    chat_id = str(uuid.uuid4())
+    db.collection("users").document(user_id).collection("chats").document(chat_id).set({
+        "mode": mode, "created_at": datetime.utcnow(), "title": "New Chat"
+    })
+    return chat_id
+
+
+def save_message(user_id, chat_id, role, content):
+    db.collection("users").document(user_id).collection("chats") \
+        .document(chat_id).collection("messages").add({
+            "role": role, "content": content, "timestamp": datetime.utcnow()
+        })
+
+
+def load_user_chats(user_id, mode):
+    chats = db.collection("users").document(user_id).collection("chats") \
+        .where("mode", "==", mode) \
+        .order_by("created_at", direction=firestore.Query.DESCENDING).stream()
+    return [(doc.id, doc.to_dict()["title"]) for doc in chats]
+
+
+def load_messages(user_id, chat_id):
+    msgs = db.collection("users").document(user_id).collection("chats") \
+        .document(chat_id).collection("messages") \
+        .order_by("timestamp").stream()
+    return [(doc.to_dict()["role"], doc.to_dict()["content"]) for doc in msgs]
+
+
+# -------------------- LLM --------------------
+@st.cache_resource
+def load_llm():
+    return ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash", temperature=0.3,
+        google_api_key=st.secrets["GOOGLE_API_KEY"]
+    )
+
+
+# ==================== AUTH SCREEN ====================
+if not st.session_state.authenticated and not st.session_state.is_guest:
+
+    col_anim, col_form = st.columns([1, 1], gap="large")
+
+    with col_anim:
+        type_text_logo()
+
+        lottie_data = load_lottie("https://assets10.lottiefiles.com/packages/lf20_jcikwtux.json")
+        if lottie_data:
+            st_lottie(lottie_data, height=360, key="login_anim")
+        else:
+            st.markdown("<div style='font-size:7rem;text-align:center;padding-top:60px'>🧠</div>", unsafe_allow_html=True)
+
+        st.markdown("<div style='text-align:center;color:#888;font-size:0.85rem;margin-top:8px;'>Analyze PDFs & Images using AI</div>", unsafe_allow_html=True)
+
+    with col_form:
+        st.markdown("<div style='padding-top:55px'></div>", unsafe_allow_html=True)
+
+        tab_login, tab_signup, tab_guest = st.tabs(["🔐 Login", "📝 Sign Up", "👤 Guest"])
+
+        with tab_login:
+            st.markdown("#### Welcome back!")
+            le = st.text_input("Email", key="login_email", placeholder="you@example.com")
+            lp = st.text_input("Password", type="password", key="login_password", placeholder="••••••••")
+            cb, cf = st.columns(2)
+            with cb:
+                if st.button("Login", use_container_width=True, type="primary"):
+                    if not le or not lp:
+                        st.warning("Please fill in all fields.")
+                    else:
+                        with st.spinner("Logging in..."):
+                            user = login(le, lp)
+                        if user:
+                            st.session_state.authenticated = True
+                            st.session_state.is_guest = False
+                            st.session_state.user_id = user.uid
+                            st.session_state.email = le
+                            st.rerun()
+            with cf:
+                if st.button("Forgot Password?", use_container_width=True):
+                    if not le:
+                        st.warning("Enter your email above first.")
+                    else:
+                        with st.spinner("Sending..."):
+                            sent = reset_password(le)
+                        if sent:
+                            st.success("📧 Reset email sent!")
+
+        with tab_signup:
+            st.markdown("#### Create your account")
+            ne = st.text_input("Email", key="signup_email", placeholder="you@example.com")
+            np = st.text_input("Password", type="password", key="signup_password", placeholder="Min 6 characters")
+            cp = st.text_input("Confirm Password", type="password", key="confirm_password", placeholder="Re-enter password")
+            if st.button("Create Account", use_container_width=True, type="primary"):
+                if not ne or not np or not cp:
+                    st.warning("Please fill in all fields.")
+                elif len(np) < 6:
+                    st.warning("Password must be at least 6 characters.")
+                elif np != cp:
+                    st.error("❌ Passwords do not match.")
+                else:
+                    with st.spinner("Creating account..."):
+                        user = signup(ne, np)
+                    if user:
+                        st.success("✅ Account created! Go to the Login tab.")
+
+        with tab_guest:
+            st.markdown("#### Continue without an account")
+            st.info("**Guest mode:** Full PDF & Image AI — no account needed.\n\n❌ Chats are not saved and clear on refresh.")
+            if st.button("👤 Continue as Guest", use_container_width=True, type="primary"):
+                st.session_state.is_guest = True
+                st.session_state.user_id = "guest"
+                st.session_state.email = "Guest"
+                st.session_state.guest_messages = []
+                st.rerun()
+
+    st.stop()
+
+
+# ==================== SIDEBAR ====================
+with st.sidebar:
+    st.markdown("""
+        <div class="sidebar-logo">
+            <div class="sidebar-logo-icon">🧠</div>
+            <span class="sidebar-logo-text">SLIDESENSE</span>
+        </div>
+    """, unsafe_allow_html=True)
+
+    if st.session_state.is_guest:
+        st.warning("👤 Guest Mode")
+        st.caption("Chats are not saved.")
+    else:
+        st.success(f"👤 {st.session_state.email}")
+
+    if st.button("🚪 Logout", use_container_width=True):
+        for k in defaults:
+            st.session_state[k] = defaults[k]
+        st.rerun()
+
+    st.divider()
+    mode = st.radio("Mode", ["📘 PDF Analyzer", "🖼 Image Q&A"])
+    st.session_state.mode = "PDF" if "PDF" in mode else "IMAGE"
+    st.divider()
+
+    if st.session_state.is_guest:
+        st.markdown("### 💬 Session Chat")
+        if st.button("🗑 Clear Chat", use_container_width=True):
+            st.session_state.guest_messages = []
             st.session_state.vector_db = None
-            st.session_state.chat_history = []
+            st.rerun()
+        if not st.session_state.current_chat_id:
+            st.session_state.current_chat_id = "guest_session"
+    else:
+        st.markdown("### 💬 Your Chats")
+        user_chats = load_user_chats(st.session_state.user_id, st.session_state.mode)
+        for chat_id, title in user_chats:
+            c1, c2 = st.columns([4, 1])
+            icon = "📘" if st.session_state.mode == "PDF" else "🖼"
+            if c1.button(f"{icon} {title}", key=f"open_{chat_id}"):
+                st.session_state.current_chat_id = chat_id
+                st.session_state.vector_db = None
+                st.rerun()
+            if c2.button("🗑", key=f"del_{chat_id}"):
+                db.collection("users").document(st.session_state.user_id) \
+                  .collection("chats").document(chat_id).delete()
+                if st.session_state.current_chat_id == chat_id:
+                    st.session_state.current_chat_id = None
+                st.rerun()
+        if st.button("➕ New Chat", use_container_width=True):
+            cid = create_new_chat(st.session_state.user_id, st.session_state.mode)
+            st.session_state.current_chat_id = cid
+            st.session_state.vector_db = None
+            st.rerun()
 
-        if st.session_state.vector_db is None:
+
+# ==================== MAIN CONTENT ====================
+if not st.session_state.current_chat_id:
+    render_logo()
+    st.markdown("<br>", unsafe_allow_html=True)
+    lottie_w = load_lottie("https://assets10.lottiefiles.com/packages/lf20_qp1q7mct.json")
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c2:
+        if lottie_w:
+            st_lottie(lottie_w, height=240, key="welcome_anim")
+    st.info("👈 Select **➕ New Chat** from the sidebar to begin.")
+
+else:
+    if st.session_state.mode == "PDF":
+        ac, tc = st.columns([1, 4])
+        with ac:
+            lp = load_lottie("https://assets10.lottiefiles.com/packages/lf20_qp1q7mct.json")
+            if lp:
+                st_lottie(lp, height=110, key="pdf_anim")
+        with tc:
+            st.markdown("## 📘 PDF Analyzer")
+            st.caption("Upload a PDF and ask questions about its content.")
+        st.divider()
+
+        pdf = st.file_uploader("Upload PDF", type="pdf")
+        if pdf and st.session_state.vector_db is None:
             with st.spinner("Processing PDF..."):
                 reader = PdfReader(pdf)
-                text = ""
-                for page in reader.pages:
-                    if page.extract_text():
-                        text += page.extract_text() + "\n"
-
-                splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=500,
-                    chunk_overlap=80
-                )
+                text = "".join(p.extract_text() or "" for p in reader.pages)
+                splitter = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=150)
                 chunks = splitter.split_text(text)
+                emb = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+                st.session_state.vector_db = FAISS.from_texts(chunks, emb)
+                st.success("✅ PDF processed! Ask your questions below.")
+    else:
+        ac, tc = st.columns([1, 4])
+        with ac:
+            li = load_lottie("https://assets10.lottiefiles.com/packages/lf20_jcikwtux.json")
+            if li:
+                st_lottie(li, height=110, key="img_anim")
+        with tc:
+            st.markdown("## 🖼 Image Q&A")
+            st.caption("Upload an image and ask questions about it.")
+        st.divider()
 
-                embeddings = HuggingFaceEmbeddings(
-                    model_name="sentence-transformers/all-MiniLM-L6-v2"
-                )
+        img_file = st.file_uploader("Upload Image", type=["png", "jpg", "jpeg"])
+        if img_file:
+            st.image(Image.open(img_file).convert("RGB"), use_container_width=True)
 
-                st.session_state.vector_db = FAISS.from_texts(chunks, embeddings)
+    # Messages
+    messages = st.session_state.guest_messages if st.session_state.is_guest else \
+               load_messages(st.session_state.user_id, st.session_state.current_chat_id)
 
-        q = st.text_input("Ask a question")
+    st.markdown("### 💬 Conversation")
+    for role, content in messages:
+        with st.chat_message("user" if role == "user" else "assistant"):
+            render_answer_with_copy(content) if role == "assistant" else st.markdown(content)
 
-        if q:
-            llm = load_llm()
-            docs = st.session_state.vector_db.similarity_search(q, k=5)
+    question = st.chat_input("Ask something...")
 
-            prompt = ChatPromptTemplate.from_template("""
-Context:
-{context}
+    if question:
+        with st.chat_message("user"):
+            st.markdown(question)
 
-Question:
-{question}
+        if st.session_state.is_guest:
+            st.session_state.guest_messages.append(("user", question))
+        else:
+            save_message(st.session_state.user_id, st.session_state.current_chat_id, "user", question)
 
-Rules:
-- Answer only from document
-- If not found say: Information not found in the document
-""")
+        if st.session_state.mode == "PDF":
+            if st.session_state.vector_db is None:
+                answer = "⚠️ Please upload a PDF first."
+            else:
+                with st.spinner("Thinking..."):
+                    docs = st.session_state.vector_db.similarity_search(question, k=6)
+                    chain = create_stuff_documents_chain(load_llm(), ChatPromptTemplate.from_template(
+                        "Context:\n{context}\n\nQuestion:\n{input}\n\nIf not found say: Information not found in document."
+                    ))
+                    result = chain.invoke({"context": docs, "input": question})
+                    answer = result if isinstance(result, str) else result.get("output_text", str(result))
+        else:
+            if not img_file:
+                answer = "⚠️ Please upload an image first."
+            else:
+                with st.spinner("🖼 Analyzing image..."):
+                    image_bytes = img_file.getvalue()
+                    encoded = base64.b64encode(image_bytes).decode("utf-8")
+                    mime = "image/png" if img_file.name.lower().endswith(".png") else "image/jpeg"
+                    response = load_llm().invoke([HumanMessage(content=[
+                        {"type": "text", "text": question},
+                        {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}},
+                    ])])
+                    answer = response.content
 
-            chain = create_stuff_documents_chain(llm, prompt)
-            res = chain.invoke({"context": docs, "question": q})
-            answer = res if isinstance(res, str) else res.get("output_text", "")
+        with st.chat_message("assistant"):
+            render_answer_with_copy(answer)
 
-            # ---------- SAVE TO SUPABASE ----------
-            supabase.table("pdf_chats").insert({
-                "user_id": st.session_state.user_id,
-                "question": q,
-                "answer": answer
-            }).execute()
+        if st.session_state.is_guest:
+            st.session_state.guest_messages.append(("assistant", answer))
+        else:
+            save_message(st.session_state.user_id, st.session_state.current_chat_id, "assistant", answer)
 
-            st.session_state.chat_history.append((q, answer))
-
-        st.markdown("## 💬 Conversation")
-
-        # ---------- LOAD FROM DB ----------
-        db_data = supabase.table("pdf_chats")\
-            .select("question,answer")\
-            .eq("user_id", st.session_state.user_id)\
-            .order("created_at", desc=True)\
-            .limit(20)\
-            .execute()
-
-        for row in reversed(db_data.data):
-            st.markdown(f"🧑 **You:** {row['question']}")
-            st.markdown(f"🤖 **AI:** {row['answer']}")
-            st.divider()
-
-# ==================== IMAGE Q&A ====================
-if mode == "🖼 Image Q&A":
-    img_file = st.file_uploader("Upload Image", type=["png", "jpg", "jpeg"])
-
-    if img_file:
-        img = Image.open(img_file).convert("RGB")
-        st.image(img, use_column_width=True)
-
-        question = st.text_input("Ask a question about the image")
-        if question:
-            with st.spinner("Analyzing image..."):
-                answer = answer_image_question(img, question)
-
-                # ---------- SAVE TO SUPABASE ----------
-                supabase.table("pdf_chats").insert({
-                    "user_id": st.session_state.user_id,
-                    "question": f"[IMAGE] {question}",
-                    "answer": answer
-                }).execute()
-
-                st.success(answer)
+        st.rerun()
