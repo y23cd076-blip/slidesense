@@ -1,5 +1,10 @@
 import streamlit as st
-from streamlit_lottie import st_lottie
+try:
+    from streamlit_lottie import st_lottie
+    LOTTIE_AVAILABLE = True
+except ImportError:
+    LOTTIE_AVAILABLE = False
+    def st_lottie(*args, **kwargs): pass
 from datetime import datetime
 import uuid
 import requests
