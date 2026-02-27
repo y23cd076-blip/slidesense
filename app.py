@@ -5,6 +5,7 @@ try:
 except ImportError:
     LOTTIE_AVAILABLE = False
     def st_lottie(*args, **kwargs): pass
+
 from datetime import datetime
 import uuid
 import requests
@@ -13,6 +14,7 @@ import json
 from PyPDF2 import PdfReader
 from PIL import Image
 import base64
+import os
 import streamlit.components.v1 as components
 
 # Firebase
@@ -29,25 +31,35 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import HumanMessage
 
 
-st.set_page_config(page_title="SlideSense AI", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="SlideSense AI", page_icon="assets/logo.png", layout="wide")
+
+# -------------------- LOAD LOGO --------------------
+def get_logo_base64():
+    """Load logo from assets/logo.png and return base64 string."""
+    logo_path = "assets/logo.png"
+    if os.path.exists(logo_path):
+        with open(logo_path, "rb") as f:
+            return base64.b64encode(f.read()).decode("utf-8")
+    return None
+
+LOGO_B64 = get_logo_base64()
+
+def logo_img_tag(size=52):
+    """Returns an <img> tag for the logo, or fallback emoji."""
+    if LOGO_B64:
+        return f'<img src="data:image/png;base64,{LOGO_B64}" width="{size}" height="{size}" style="border-radius:10px; object-fit:contain;">'
+    return f'<span style="font-size:{size//2}px;">📊</span>'
+
 
 st.markdown("""
     <style>
     #MainMenu {visibility: hidden;}
     header {visibility: hidden;}
     footer {visibility: hidden;}
+
     .logo-bar {
         display: flex; align-items: center; gap: 14px;
         padding: 18px 0 10px 0;
-    }
-    .logo-icon {
-        width: 56px; height: 56px;
-        background: linear-gradient(135deg, #6C63FF 0%, #48CAE4 100%);
-        border-radius: 14px;
-        display: flex; align-items: center; justify-content: center;
-        font-size: 30px;
-        box-shadow: 0 4px 20px rgba(108,99,255,0.45);
-        flex-shrink: 0;
     }
     .logo-text {
         font-size: 2.2rem; font-weight: 900; letter-spacing: 5px;
@@ -64,13 +76,6 @@ st.markdown("""
         padding: 8px 0 14px 0;
         border-bottom: 1px solid rgba(108,99,255,0.2);
         margin-bottom: 12px;
-    }
-    .sidebar-logo-icon {
-        width: 34px; height: 34px;
-        background: linear-gradient(135deg, #6C63FF 0%, #48CAE4 100%);
-        border-radius: 8px;
-        display: flex; align-items: center; justify-content: center;
-        font-size: 17px;
     }
     .sidebar-logo-text {
         font-size: 1rem; font-weight: 800; letter-spacing: 3px;
@@ -132,10 +137,11 @@ def load_lottie(url):
 
 
 def type_text_logo():
+    """Animated typing logo for auth page."""
     if st.session_state.logo_typed:
-        st.markdown("""
+        st.markdown(f"""
             <div class="logo-bar">
-                <div class="logo-icon">🧠</div>
+                {logo_img_tag(56)}
                 <div>
                     <p class="logo-text">SLIDESENSE</p>
                     <p class="logo-tagline">AI · PDF · Image Analyzer</p>
@@ -151,7 +157,7 @@ def type_text_logo():
         out += c
         placeholder.markdown(f"""
             <div class="logo-bar">
-                <div class="logo-icon">🧠</div>
+                {logo_img_tag(56)}
                 <div>
                     <p class="logo-text">{out}</p>
                     <p class="logo-tagline">AI · PDF · Image Analyzer</p>
@@ -163,9 +169,10 @@ def type_text_logo():
 
 
 def render_logo():
-    st.markdown("""
+    """Static logo for main area."""
+    st.markdown(f"""
         <div class="logo-bar">
-            <div class="logo-icon">🧠</div>
+            {logo_img_tag(56)}
             <div>
                 <p class="logo-text">SLIDESENSE</p>
                 <p class="logo-tagline">AI · PDF · Image Analyzer</p>
@@ -235,12 +242,33 @@ def reset_password(email):
 
 
 # -------------------- FIRESTORE --------------------
+def get_next_chat_number(user_id, mode):
+    """Count existing chats to auto-number new ones."""
+    chats = db.collection("users").document(user_id).collection("chats") \
+        .where("mode", "==", mode).stream()
+    return sum(1 for _ in chats) + 1
+
+
 def create_new_chat(user_id, mode):
     chat_id = str(uuid.uuid4())
+    num = get_next_chat_number(user_id, mode)
+    icon = "📘" if mode == "PDF" else "🖼"
+    title = f"{icon} Chat {num}"
     db.collection("users").document(user_id).collection("chats").document(chat_id).set({
-        "mode": mode, "created_at": datetime.utcnow(), "title": "New Chat"
+        "mode": mode,
+        "created_at": datetime.utcnow(),
+        "title": title
     })
     return chat_id
+
+
+def update_chat_title(user_id, chat_id, first_question):
+    """Rename chat to first 35 chars of the first question asked."""
+    short = first_question.strip()[:35]
+    if len(first_question.strip()) > 35:
+        short += "..."
+    db.collection("users").document(user_id).collection("chats") \
+        .document(chat_id).update({"title": short})
 
 
 def save_message(user_id, chat_id, role, content):
@@ -285,7 +313,10 @@ if not st.session_state.authenticated and not st.session_state.is_guest:
         if lottie_data:
             st_lottie(lottie_data, height=360, key="login_anim")
         else:
-            st.markdown("<div style='font-size:7rem;text-align:center;padding-top:60px'>🧠</div>", unsafe_allow_html=True)
+            st.markdown("<div style='text-align:center;padding-top:60px'>", unsafe_allow_html=True)
+            if LOGO_B64:
+                st.markdown(f'<div style="text-align:center">{logo_img_tag(120)}</div>', unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
         st.markdown("<div style='text-align:center;color:#888;font-size:0.85rem;margin-top:8px;'>Analyze PDFs & Images using AI</div>", unsafe_allow_html=True)
 
@@ -325,18 +356,18 @@ if not st.session_state.authenticated and not st.session_state.is_guest:
         with tab_signup:
             st.markdown("#### Create your account")
             ne = st.text_input("Email", key="signup_email", placeholder="you@example.com")
-            np = st.text_input("Password", type="password", key="signup_password", placeholder="Min 6 characters")
+            np_ = st.text_input("Password", type="password", key="signup_password", placeholder="Min 6 characters")
             cp = st.text_input("Confirm Password", type="password", key="confirm_password", placeholder="Re-enter password")
             if st.button("Create Account", use_container_width=True, type="primary"):
-                if not ne or not np or not cp:
+                if not ne or not np_ or not cp:
                     st.warning("Please fill in all fields.")
-                elif len(np) < 6:
+                elif len(np_) < 6:
                     st.warning("Password must be at least 6 characters.")
-                elif np != cp:
+                elif np_ != cp:
                     st.error("❌ Passwords do not match.")
                 else:
                     with st.spinner("Creating account..."):
-                        user = signup(ne, np)
+                        user = signup(ne, np_)
                     if user:
                         st.success("✅ Account created! Go to the Login tab.")
 
@@ -355,9 +386,9 @@ if not st.session_state.authenticated and not st.session_state.is_guest:
 
 # ==================== SIDEBAR ====================
 with st.sidebar:
-    st.markdown("""
+    st.markdown(f"""
         <div class="sidebar-logo">
-            <div class="sidebar-logo-icon">🧠</div>
+            {logo_img_tag(36)}
             <span class="sidebar-logo-text">SLIDESENSE</span>
         </div>
     """, unsafe_allow_html=True)
@@ -391,8 +422,7 @@ with st.sidebar:
         user_chats = load_user_chats(st.session_state.user_id, st.session_state.mode)
         for chat_id, title in user_chats:
             c1, c2 = st.columns([4, 1])
-            icon = "📘" if st.session_state.mode == "PDF" else "🖼"
-            if c1.button(f"{icon} {title}", key=f"open_{chat_id}"):
+            if c1.button(title, key=f"open_{chat_id}"):
                 st.session_state.current_chat_id = chat_id
                 st.session_state.vector_db = None
                 st.rerun()
@@ -475,6 +505,10 @@ else:
         if st.session_state.is_guest:
             st.session_state.guest_messages.append(("user", question))
         else:
+            # Rename chat to first question if it still has default "Chat N" title
+            existing_msgs = load_messages(st.session_state.user_id, st.session_state.current_chat_id)
+            if len(existing_msgs) == 0:
+                update_chat_title(st.session_state.user_id, st.session_state.current_chat_id, question)
             save_message(st.session_state.user_id, st.session_state.current_chat_id, "user", question)
 
         if st.session_state.mode == "PDF":
