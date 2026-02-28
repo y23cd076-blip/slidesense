@@ -184,14 +184,47 @@ def render_logo():
 def render_answer_with_copy(answer: str) -> None:
     st.markdown(answer)
     safe_text = json.dumps(answer)
+    # Use postMessage to escape the iframe sandbox and copy to clipboard
     components.html(
-        f"""<button onclick="navigator.clipboard.writeText({safe_text});"
-            style="margin-top:4px;padding:4px 12px;border-radius:6px;
+        f"""
+        <script>
+        function copyText() {{
+            var text = {safe_text};
+            // Try modern clipboard API first (works outside iframe via postMessage)
+            try {{
+                var el = document.createElement('textarea');
+                el.value = text;
+                el.setAttribute('readonly', '');
+                el.style.position = 'absolute';
+                el.style.left = '-9999px';
+                document.body.appendChild(el);
+                el.select();
+                document.execCommand('copy');
+                document.body.removeChild(el);
+                var btn = document.getElementById('copybtn');
+                btn.innerText = '✅ Copied!';
+                btn.style.borderColor = '#48CAE4';
+                btn.style.color = '#48CAE4';
+                setTimeout(function() {{
+                    btn.innerText = '📋 Copy';
+                    btn.style.borderColor = '#6C63FF';
+                    btn.style.color = '#6C63FF';
+                }}, 2000);
+            }} catch(e) {{
+                // Fallback: open prompt with text selected
+                window.prompt("Copy this text:", text);
+            }}
+        }}
+        </script>
+        <button id="copybtn" onclick="copyText();"
+            style="margin-top:4px;padding:5px 14px;border-radius:6px;
                    border:1px solid #6C63FF;color:#6C63FF;
-                   background:transparent;cursor:pointer;font-size:12px;">
+                   background:transparent;cursor:pointer;font-size:12px;
+                   transition: all 0.2s ease;">
             📋 Copy
-        </button>""",
-        height=40,
+        </button>
+        """,
+        height=45,
     )
 
 
@@ -480,12 +513,28 @@ else:
                 st_lottie(li, height=110, key="img_anim")
         with tc:
             st.markdown("## 🖼 Image Q&A")
-            st.caption("Upload an image and ask questions about it.")
+            st.caption("Upload an image or use your live camera to ask questions.")
         st.divider()
 
-        img_file = st.file_uploader("Upload Image", type=["png", "jpg", "jpeg"])
-        if img_file:
-            st.image(Image.open(img_file).convert("RGB"), use_container_width=True)
+        img_source = st.radio(
+            "Image Source",
+            ["📁 Upload Image", "📷 Live Camera"],
+            horizontal=True,
+            key="img_source"
+        )
+
+        img_file = None
+        camera_file = None
+
+        if img_source == "📁 Upload Image":
+            img_file = st.file_uploader("Upload Image", type=["png", "jpg", "jpeg"])
+            if img_file:
+                st.image(Image.open(img_file).convert("RGB"), use_container_width=True)
+        else:
+            st.info("📷 Point your camera and click **\'Take Photo\'** to capture.")
+            camera_file = st.camera_input("Take a photo")
+            if camera_file:
+                st.image(Image.open(camera_file).convert("RGB"), use_container_width=True)
 
     # Messages
     messages = st.session_state.guest_messages if st.session_state.is_guest else \
@@ -526,13 +575,18 @@ else:
                     result = chain.invoke({"context": docs, "input": question})
                     answer = result if isinstance(result, str) else result.get("output_text", str(result))
         else:
-            if not img_file:
-                answer = "⚠️ Please upload an image first."
+            active_image = img_file or camera_file
+            if not active_image:
+                answer = "⚠️ Please upload an image or take a photo first."
             else:
                 with st.spinner("🖼 Analyzing image..."):
-                    image_bytes = img_file.getvalue()
+                    image_bytes = active_image.getvalue()
                     encoded = base64.b64encode(image_bytes).decode("utf-8")
-                    mime = "image/png" if img_file.name.lower().endswith(".png") else "image/jpeg"
+                    # camera_input is always jpeg; uploaded files use their extension
+                    if camera_file and not img_file:
+                        mime = "image/jpeg"
+                    else:
+                        mime = "image/png" if img_file.name.lower().endswith(".png") else "image/jpeg"
                     response = load_llm().invoke([HumanMessage(content=[
                         {"type": "text", "text": question},
                         {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}},
