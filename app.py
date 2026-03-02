@@ -650,12 +650,7 @@ body {
     border-radius:6px;
     box-shadow:0 4px 10px rgba(239,68,68,0.4);
   }
-  .status-text {
-    margin-top:22px; color:#94a3b8;
-    font-size:13px; letter-spacing:3px;
-    text-transform:uppercase;
-    animation:pulse-text 1.5s infinite;
-  }
+
   @keyframes scan {
     0%   { top:-50px; opacity:0; }
     10%  { opacity:1; }
@@ -663,10 +658,7 @@ body {
     100% { top:100%; opacity:0; }
   }
   @keyframes shimmer { 100% { left:100%; } }
-  @keyframes pulse-text {
-    0%,100% { opacity:0.4; color:#94a3b8; }
-    50%     { opacity:1;   color:#38bdf8; }
-  }
+
 </style>
 </head>
 <body>
@@ -680,7 +672,6 @@ body {
     <div class="skeleton-line"></div>
     <div class="pdf-badge">PDF</div>
   </div>
-  <div class="status-text">Analyzing...</div>
 </body>
 </html>
 """, height=300)
@@ -699,9 +690,140 @@ body {
     else:
         ac, tc = st.columns([1, 4])
         with ac:
-            li = load_lottie("https://assets10.lottiefiles.com/packages/lf20_jcikwtux.json")
-            if li:
-                st_lottie(li, height=110, key="img_anim")
+            components.html("""<!DOCTYPE html>
+<html><head><style>
+* { box-sizing:border-box; margin:0; padding:0; }
+body {
+  display:flex; align-items:center; justify-content:center;
+  background:transparent;
+  font-family:'Segoe UI', sans-serif;
+  height:130px; overflow:hidden;
+}
+.scene {
+  position:relative; width:200px; height:120px;
+}
+
+/* Image card */
+.img-card {
+  position:absolute; left:0; top:10px;
+  width:65px; height:90px;
+  border-radius:10px;
+  background:linear-gradient(160deg,#60a5fa 0%,#3b82f6 40%,#1e40af 100%);
+  box-shadow:0 6px 20px rgba(59,130,246,0.4);
+  overflow:hidden;
+  animation:cardFloat 3s ease-in-out infinite;
+}
+/* mountain svg inside card */
+.img-card svg { width:100%; height:100%; }
+
+/* Search bar */
+.search-bar {
+  position:absolute; left:38px; top:4px;
+  width:150px; height:28px;
+  background:white;
+  border-radius:20px;
+  box-shadow:0 4px 15px rgba(0,0,0,0.15);
+  display:flex; align-items:center;
+  padding:0 8px; gap:5px;
+  animation:slideInDown 0.6s ease-out forwards;
+  opacity:0;
+}
+.search-icon { color:#9ca3af; font-size:11px; flex-shrink:0; }
+.search-text {
+  font-size:9px; color:#374151; font-weight:500;
+  white-space:nowrap; overflow:hidden;
+  border-right:1.5px solid #374151;
+  width:0;
+  animation:typeText 1s 0.8s steps(12) forwards;
+}
+.search-btn {
+  margin-left:auto; width:20px; height:20px;
+  background:#3b82f6; border-radius:6px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:9px; color:white; flex-shrink:0;
+  animation:btnPop 0.3s 1.8s ease-out both;
+  transform:scale(0);
+}
+
+/* Response bubble */
+.response-bubble {
+  position:absolute; right:0; bottom:0;
+  width:100px; height:48px;
+  background:linear-gradient(135deg,#34d399,#10b981);
+  border-radius:10px 10px 10px 2px;
+  display:flex; align-items:center; justify-content:center;
+  box-shadow:0 6px 20px rgba(16,185,129,0.35);
+  animation:bubblePop 0.5s 2s cubic-bezier(0.175,0.885,0.32,1.275) both;
+  transform:scale(0); transform-origin:bottom left;
+}
+.response-bubble::after {
+  content:"";
+  position:absolute; bottom:-8px; left:12px;
+  width:0; height:0;
+  border-left:8px solid transparent;
+  border-right:0px solid transparent;
+  border-top:8px solid #10b981;
+}
+.response-inner {
+  background:rgba(255,255,255,0.25);
+  border-radius:6px; padding:5px 10px;
+  font-size:9px; font-weight:600; color:white;
+  letter-spacing:0.3px;
+  animation:fadeIn 0.3s 2.4s ease-out both; opacity:0;
+}
+
+@keyframes cardFloat {
+  0%,100% { transform:translateY(0px); }
+  50%      { transform:translateY(-5px); }
+}
+@keyframes slideInDown {
+  from { opacity:0; transform:translateY(-10px); }
+  to   { opacity:1; transform:translateY(0); }
+}
+@keyframes typeText {
+  from { width:0; }
+  to   { width:72px; border-right:none; }
+}
+@keyframes btnPop {
+  to { transform:scale(1); }
+}
+@keyframes bubblePop {
+  to { transform:scale(1); }
+}
+@keyframes fadeIn {
+  to { opacity:1; }
+}
+</style></head>
+<body>
+<div class="scene">
+  <!-- Image Card with mountain SVG -->
+  <div class="img-card">
+    <svg viewBox="0 0 65 90" xmlns="http://www.w3.org/2000/svg">
+      <rect width="65" height="90" fill="#bfdbfe"/>
+      <polygon points="10,80 32,30 54,80" fill="#1e3a8a" opacity="0.9"/>
+      <polygon points="0,80 18,45 36,80" fill="#1e40af" opacity="0.8"/>
+      <polygon points="28,80 45,42 65,80" fill="#1d4ed8" opacity="0.7"/>
+      <polygon points="24,42 32,28 40,42" fill="white" opacity="0.9"/>
+      <rect y="60" width="65" height="30" fill="#1e3a8a" opacity="0.5"/>
+      <!-- clouds -->
+      <ellipse cx="12" cy="18" rx="8" ry="4" fill="white" opacity="0.7"/>
+      <ellipse cx="50" cy="14" rx="6" ry="3" fill="white" opacity="0.6"/>
+    </svg>
+  </div>
+
+  <!-- Search Bar -->
+  <div class="search-bar">
+    <span class="search-icon">🔍</span>
+    <span class="search-text">What is this?</span>
+    <div class="search-btn">🔍</div>
+  </div>
+
+  <!-- Response Bubble -->
+  <div class="response-bubble">
+    <div class="response-inner">A Mountain</div>
+  </div>
+</div>
+</body></html>""", height=140)
         with tc:
             st.markdown("## 🖼 Image Q&A")
             st.caption("Upload an image or use your live camera.")
