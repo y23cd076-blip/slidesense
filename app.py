@@ -1,4 +1,3 @@
-
 import streamlit as st
 try:
     from streamlit_lottie import st_lottie
@@ -595,86 +594,99 @@ body {
         st.divider()
 
         pdf = st.file_uploader("Upload PDF", type="pdf")
+
+        # ---- NEW PDF SCANNING ANIMATION ----
         if pdf and st.session_state.vector_db is None:
-            # Show custom PDF scanning animation using components.html (supports CSS animations)
             anim_slot = st.empty()
             with anim_slot:
-                components.html("""
-<!DOCTYPE html>
+                components.html("""<!DOCTYPE html>
 <html>
 <head>
 <style>
   body {
-    display:flex; flex-direction:column;
-    align-items:center; justify-content:center;
-    background:transparent; margin:0; padding:20px 0;
-    font-family:'Segoe UI',Roboto,sans-serif;
+    background: transparent;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 120px;
+    margin: 0;
+    font-family: 'Inter', 'Segoe UI', sans-serif;
   }
-  .pdf-card {
-    position:relative; width:140px; height:190px;
-    background:rgba(255,255,255,0.05);
-    backdrop-filter:blur(10px);
-    border:1px solid rgba(255,255,255,0.15);
-    border-radius:12px;
-    box-shadow:0 8px 32px rgba(0,0,0,0.5);
-    overflow:hidden;
-    display:flex; flex-direction:column;
-    padding:20px 15px; box-sizing:border-box;
+  .loader-wrapper {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 15px;
   }
-  .skeleton-line {
-    height:8px; background:#334155;
-    border-radius:4px; margin-bottom:12px;
-    position:relative; overflow:hidden; width:100%;
+  .pdf-box {
+    position: relative;
+    width: 48px;
+    height: 64px;
+    background: #1e293b;
+    border: 2px solid #38bdf8;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 0 20px rgba(56, 189, 248, 0.2);
   }
-  .skeleton-line.short { width:60%; }
-  .skeleton-line::after {
-    content:""; position:absolute;
-    top:0; left:-100%; width:100%; height:100%;
-    background:linear-gradient(90deg,transparent,rgba(255,255,255,0.25),transparent);
-    animation:shimmer 1.5s infinite;
+  .laser {
+    position: absolute;
+    width: 100%;
+    height: 3px;
+    background: #38bdf8;
+    box-shadow: 0 0 12px #38bdf8, 0 0 4px #38bdf8;
+    z-index: 2;
+    animation: scan-loop 2s ease-in-out infinite;
   }
-  .scanner-beam {
-    position:absolute; top:-50px; left:0;
-    width:100%; height:50px;
-    background:linear-gradient(to bottom,transparent,rgba(56,189,248,0.6));
-    border-bottom:2px solid #38bdf8;
-    box-shadow:0 5px 20px rgba(56,189,248,0.5);
-    animation:scan 2.5s infinite ease-in-out alternate;
-    z-index:10;
+  .content-lines {
+    padding: 10px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
   }
-  .pdf-badge {
-    position:absolute; bottom:12px; right:12px;
-    background:linear-gradient(135deg,#ef4444,#b91c1c);
-    color:white; font-size:10px; letter-spacing:1px;
-    font-weight:700; padding:4px 8px;
-    border-radius:6px;
-    box-shadow:0 4px 10px rgba(239,68,68,0.4);
+  .line {
+    height: 3px;
+    background: #334155;
+    border-radius: 10px;
   }
-
-  @keyframes scan {
-    0%   { top:-50px; opacity:0; }
-    10%  { opacity:1; }
-    90%  { opacity:1; }
-    100% { top:100%; opacity:0; }
+  .status-text {
+    color: #94a3b8;
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
   }
-  @keyframes shimmer { 100% { left:100%; } }
-
+  .dots::after {
+    content: '';
+    animation: dot-count 1.5s infinite;
+  }
+  @keyframes scan-loop {
+    0%, 100% { top: 5%;  opacity: 0.5; }
+    50%       { top: 90%; opacity: 1;   }
+  }
+  @keyframes dot-count {
+    0%   { content: '';    }
+    25%  { content: '.';   }
+    50%  { content: '..';  }
+    75%  { content: '...'; }
+    100% { content: '';    }
+  }
 </style>
 </head>
 <body>
-  <div class="pdf-card">
-    <div class="scanner-beam"></div>
-    <div class="skeleton-line"></div>
-    <div class="skeleton-line"></div>
-    <div class="skeleton-line short"></div>
-    <div class="skeleton-line"></div>
-    <div class="skeleton-line short"></div>
-    <div class="skeleton-line"></div>
-    <div class="pdf-badge">PDF</div>
+  <div class="loader-wrapper">
+    <div class="pdf-box">
+      <div class="laser"></div>
+      <div class="content-lines">
+        <div class="line" style="width:100%"></div>
+        <div class="line" style="width:80%"></div>
+        <div class="line" style="width:90%"></div>
+        <div class="line" style="width:60%"></div>
+        <div class="line" style="width:85%"></div>
+      </div>
+    </div>
+    <div class="status-text">Analyzing the PDF<span class="dots"></span></div>
   </div>
 </body>
-</html>
-""", height=300)
+</html>""", height=120)
 
             reader = PdfReader(pdf)
             text = "".join(p.extract_text() or "" for p in reader.pages)
@@ -683,7 +695,6 @@ body {
             emb = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
             st.session_state.vector_db = FAISS.from_texts(chunks, emb)
 
-            # Clear animation and show success
             anim_slot.empty()
             st.success("✅ PDF processed! Ask your questions below.")
 
